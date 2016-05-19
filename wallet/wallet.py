@@ -25,6 +25,7 @@ class Address:
         self.addr = pubtoaddr(self.pub)
         self.priv = encode_privkey(exp, 'wif')
         self.balance = None
+        self.n = -1
 
 class TxData:
     def __init__(self, tx, chg_idx):
@@ -41,25 +42,16 @@ class TxData:
                 self.change = output
 
 class Wallet:
-    def __init__(self, passphrase, start_idx, end_idx, algo=0):
+    def __init__(self, passphrase): 
         self.addresses = []
         self.idx_map = {}
         self.n = 0
         self.passphrase = passphrase
 
-        self.algo = algo
-        self.passphrase = passphrase
-        if algo == 0:
-            exp = sha256(passphrase)
-            addresses = [Address(exp)]
-        elif algo == 1:
-            addresses = create_address_range(passphrase, start_idx, end_idx)
-        self.add_many([None for i in range(start_idx)])
-        self.add_many(addresses)
-
     def add(self, address):
         self.addresses.append(address)
         if address is not None: self.idx_map[address.addr] = self.n
+        address.n = self.n
         self.n += 1
 
     def add_many(self, addresses):
@@ -80,11 +72,10 @@ class Wallet:
         return next((c for c in self.addresses if c.balance is None), None)
 
     def expand(self, i):
-        if self.algo > 0:
-            addresses = create_address_range(self.passphrase, self.n, self.n+i)
-            self.add_many(addresses)
-        else: raise Exception('Unable to expand a singular brainwallet')
-
+        addresses = create_address_range(self.passphrase, self.n, self.n+i)
+        self.add_many(addresses)
+        return addresses
+        
     def update_balances(self, from_idx = 0):
         global PROVIDER
         batches=[]
@@ -105,14 +96,24 @@ class Wallet:
 
         for batch in batches:
             addr_info = PROVIDER.get_address_info(batch)
-            n_unused = 0
             for i,info in enumerate(addr_info):
-                if info[1] == 0:
-                    n_unused += 1
-                else:
+                if info[1] > 0:
                     addr = self.get(batch[i])
                     addr.balance = info[0]
-            if n_unused >= 5: break
+
+    def auto_init(self, auto_print = True):
+        gap_limit = 5
+        print_wallet_header()
+        while True:
+            update_from = len(self.addresses)
+            new_addrs = self.expand(10)
+            self.update_balances(update_from)
+            trailing_addrs = self.addresses[-gap_limit:]
+            n_unused = len([a for a in trailing_addrs if a.balance is None])
+            print_wallet_addresses(new_addrs, False)
+            if n_unused >= gap_limit:
+                break
+        print_wallet_footer(self)
 
 class AddrOutOfRangeEx(Exception):
     pass
@@ -128,7 +129,6 @@ def create_address_range(passphrase, start, end):
     for i in range(start, end):
         exp = sha256(passphrase + str(i))
         list.append(Address(exp))
-        update_progress(float(i-start+1) / (end-start), 'Deriving keys')
     return list
 
 def make_tx(address, to_address, change_address, amount, fee = None):
@@ -275,11 +275,11 @@ def sweep(wallet, priv, to_addr_idx = None):
     else:
         print('Sweeping aborted.')
 
-def print_wallet(wallet, show_spent = False, show_unused_n = 5):
-    n_unused = 0
+def print_wallet_header():
     print('\n#\taddress\t\t\t\t\tUSD\t\tBTC')
-    total = 0
-    for i, a in enumerate(wallet.addresses):
+
+def print_wallet_addresses(addresses, show_spent):
+    for  a in addresses:
         if a is None:
             pass
         else:
@@ -288,17 +288,23 @@ def print_wallet(wallet, show_spent = False, show_unused_n = 5):
             if a.balance == 0 and not show_spent:
                 continue
             if a.balance is not None:
-                total += a.balance
                 balance_str = fmt_satoshi(a.balance)
                 fiat_str = '{0:.2f}'.format(to_usd(balance_str))
-            else:
-                n_unused += 1
-            print('{}\t{}\t{}\t{}'.format(i, a.addr, fiat_str.ljust(10), balance_str))
-        if n_unused >= show_unused_n: break
+            print('{}\t{}\t{}\t{}'.format(a.n, a.addr, fiat_str.ljust(10), balance_str))
 
+def print_wallet_footer(wallet):
+    total = 0
+    for a in wallet.addresses:
+        if a.balance is not None:
+            total += a.balance
     print(72 * '-') 
     usd_total = '{:.2f}'.format(to_usd(fmt_satoshi(total))).ljust(10)
     print('TOTAL: \t\t\t\t\t\t{}\t{}'.format(usd_total, fmt_satoshi(total)))
+
+def print_wallet(wallet, show_spent = False):
+    print_wallet_header()
+    print_wallet_addresses(wallet.addresses, show_spent)
+    print_wallet_footer(wallet)
 
 def sign_text(address):
     print('Enter the message to sign. End with a newline.\n')
@@ -380,9 +386,7 @@ def build_commands():
                             help='Only craft a tx and print it out without sending')
 
     listcmd = argparse.ArgumentParser(prog='list', description=
-                                        'List currently generated addresses.')
-    listcmd.add_argument('-u', '--unused', type=int,
-                            help='Cut off printing at n unused addresses', default=5)
+                                        'List the generated addresses.')
     listcmd.add_argument('-s', '--showSpent', action='store_true',
                             help='Show used/spent addresses', default=False)
 
@@ -396,7 +400,7 @@ def build_commands():
                             'If not specified, funds are swept into the first unused address.'))
 
     refreshcmd = argparse.ArgumentParser(prog='refresh', description=
-                                        'Refreshes the wallet and balances.')
+                                        'Updates the balances.')
 
     expandcmd = argparse.ArgumentParser(prog='expand', description=
                                         'Expands a deterministic wallet by N entries.')
@@ -431,48 +435,41 @@ def build_commands():
     return cmds
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-r', '--range', default=25,
-                        help=('Range of address indexes if using a deterministic wallet.'
-                                'One number will generate n iterations starting from 0, '
-                                'while n-m format will generate a specific range of iterations.'))
-    parser.add_argument('-a', '--algorithm', choices=[0,1], type=int,
-                        default='1', help = '''Wallet generation algorithm.
-                        0 - single brainwallet.
-                        1 - type 1 deterministic wallet.'''
-                        )
-    parser.add_argument('-d', '--dataProvider', choices=['blockchaininfo', 'blockr', 'insight', 'blockcypher'],
-                        default='blockchaininfo', help='Data provider for the wallet')
-    parser.add_argument('-n', '--noFiat', action='store_true',
-                        default=False, help='Turns off fiat conversion')
-    parser.add_argument('-f', '--file', help='Reads the passphrase from an AES encrypted file.')
-    parser.add_argument('-w', '--diceware', action='store_true',
-                        default=False, help='The passphrase is interpreted as a series of diceware numbers')
-    parser.add_argument('-o', '--offline', action='store_true',
-                        default=False, help='Whether to immediately fetch address balances online')
-    parser.add_argument('-u', '--url', help='''Set a custom hostname for the selected data provider.
-                                            The format should be e.g. http[s]://url.com[:80].
-                                            Useful for open source block explorers that exist in different
-                                            locations but have identical operation contracts.''')
-    args = parser.parse_args()
 
-    start_idx = 0
-    end_idx = 1
-    try:
-        end_idx = int(args.range)
-    except:
-        try:
-            rng = args.range.split('-')
-            assert len(rng) == 2
-            start_idx = int(rng[0])
-            end_idx = int(rng[1])
-        except:
-            print('Range parameter should be an integer or a range of values in the n-m format.')
-            exit()
+    data_provider_help = 'data provider for the wallet'
+    no_conv_help = 'turns off fiat conversion'
+    file_help = 'reads the passphrase from a previously saved key file'
+    diceware_help = 'interprets the passphrase as a series of diceware numbers'
+    offline_help = 'starts the wallet in the offline mode'
+    url_help = '''sets a custom hostname for the selected data provider.
+                    The format should be e.g. http[s]://url.com[:80].
+                    Useful for open source block explorers that exist in different
+                    locations but have identical operation contracts'''
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('-d', '--dataProvider',
+                        choices=['blockchaininfo', 'blockr', 'insight', 'blockcypher'],
+                        default='blockchaininfo', help = data_provider_help)
+
+    parser.add_argument('-n', '--noConversion', action='store_true',
+                        default=False, help = no_conv_help)
+
+    parser.add_argument('-f', '--file', help = file_help)
+
+    parser.add_argument('-w', '--diceware', action='store_true',
+                        default=False, help = diceware_help)
+
+    parser.add_argument('-o', '--offline', action='store_true',
+                        default=False, help = offline_help)
+
+    parser.add_argument('-u', '--url', help = url_help)
+
+    args = parser.parse_args()
 
     global NO_FIAT, PROVIDER
     PROVIDER = get_provider_by_name(args.dataProvider)
-    NO_FIAT = args.noFiat
+    NO_FIAT = args.noConversion
 
     if args.url is not None:
         PROVIDER.host = args.url.strip().strip('/')
@@ -503,19 +500,16 @@ def main():
             diceware_dict = diceware.load_diceware()
             ph = diceware.to_string(ph, diceware_dict)
 
-    wallet = Wallet(ph, start_idx, end_idx, args.algorithm)
-
-    if args.offline:
-        print('\nWARNING: wallet operating offline')
-    else:
-        wallet.update_balances()
-
-    print('Used addressess with a balance of zero BTC are hidden.\n'
+    wallet = Wallet(ph)
+    if not args.offline:
+        wallet.auto_init()
+        print('Used addressess with a balance of zero BTC are hidden.\n'
             'Use list -s to show such addresses.\n')
-    print_wallet(wallet)
+    else:
+        print(colorize('yellow', 'Wallet offline. Use "expand" to generate addresses'))
+        print_wallet(wallet)
 
     cmds = build_commands()
-
     print("Type 'help' to display available commands")
 
     while True:
@@ -556,7 +550,7 @@ def input_loop(cmds, wallet):
     elif c == 'help':
         display_help(cmds)
     elif c == 'list':
-        print_wallet(wallet, cmd_args.showSpent, cmd_args.unused)
+        print_wallet(wallet, cmd_args.showSpent)
     elif c == 'refresh':
         refresh_wallet(wallet)
     elif c == 'sweep':
@@ -565,7 +559,6 @@ def input_loop(cmds, wallet):
         return False
     elif c == 'expand':
         wallet.expand(cmd_args.n)
-        refresh_wallet(wallet)
     elif c == 'save':
         save_ph_to_file('key.txt', wallet.passphrase)
     elif c == 'dumppriv':
