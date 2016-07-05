@@ -208,7 +208,7 @@ def send(wallet, addr_idx, to_address, amount, fee = None,
             chg_address_str = None, craft_only = False):
     
     from_addr = wallet.get(addr_idx)
-    if from_addr.balance is None or from_addr.balance <= amount:
+    if from_addr.balance is None or from_addr.balance < amount:
         print('Insufficient balance on the specified address.')
         return
 
