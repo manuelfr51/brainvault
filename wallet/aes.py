@@ -1,3 +1,5 @@
+import os
+
 from aespython import key_expander, aes_cipher, cbc_mode
 from bitcoin.main import sha256
 

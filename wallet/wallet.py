@@ -42,7 +42,7 @@ class TxData:
                 self.change = output
 
 class Wallet:
-    def __init__(self, passphrase): 
+    def __init__(self, passphrase):
         self.addresses = []
         self.idx_map = {}
         self.n = 0
@@ -75,7 +75,7 @@ class Wallet:
         addresses = create_address_range(self.passphrase, self.n, self.n+i)
         self.add_many(addresses)
         return addresses
-        
+
     def update_balances(self, from_idx = 0):
         global PROVIDER
         batches=[]
@@ -167,7 +167,7 @@ def make_tx(address, to_address, change_address, amount, fee = None):
 
 def validate_tx(wallet, tx, chg_idx, from_addr, chg_address_str):
     print('')
-    
+
     tx_data = TxData(tx, chg_idx)
     outs = tx_data.outs
     chg = tx_data.change
@@ -198,7 +198,7 @@ def validate_tx(wallet, tx, chg_idx, from_addr, chg_address_str):
 
     # print fee
     print('Fee:    ' + colorize('yellow', '{}').format(fmt_satoshi(fee)))
-    
+
     # assert that all values add up and that nothing is lost
     assert fee + spending + chg_value == from_addr.balance
     if chg_value > 0:
@@ -206,7 +206,7 @@ def validate_tx(wallet, tx, chg_idx, from_addr, chg_address_str):
 
 def send(wallet, addr_idx, to_address, amount, fee = None,
             chg_address_str = None, craft_only = False):
-    
+
     from_addr = wallet.get(addr_idx)
     if from_addr.balance is None or from_addr.balance < amount:
         print('Insufficient balance on the specified address.')
@@ -241,7 +241,7 @@ def send(wallet, addr_idx, to_address, amount, fee = None,
         print('Transaction aborted.')
 
 def sweep(wallet, priv, to_addr_idx = None):
-    
+
     global PROVIDER
 
     try:
@@ -297,7 +297,7 @@ def print_wallet_footer(wallet):
     for a in wallet.addresses:
         if a.balance is not None:
             total += a.balance
-    print(72 * '-') 
+    print(72 * '-')
     usd_total = '{:.2f}'.format(to_usd(fmt_satoshi(total))).ljust(10)
     print('TOTAL: \t\t\t\t\t\t{}\t{}'.format(usd_total, fmt_satoshi(total)))
 
@@ -520,8 +520,9 @@ def main():
             print('The specified address index is out of generated range. '
                     'Use the expand command to generate more addresses.')
         except Exception as e:
+            import traceback
             print('Error:')
-            print(e)
+            traceback.print_exc()
 
     del(ph)
     del(wallet)
@@ -593,7 +594,7 @@ def update_progress(progress, text):
     sys.stdout.flush()
 
 def colorize(color, text):
-    system = platform.system() 
+    system = platform.system()
     if system != 'Linux':
         return text
     else:
